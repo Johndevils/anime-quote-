@@ -56,7 +56,7 @@ if ($text == "/start") {
 
 } elseif ($text == "/quote") {
     // Fetch random anime quote
-    $response = file_get_contents("https://animechan.xyz/api/random");
+    $response = file_get_contents("https://animechan.vercel.app/api/random");
     $data = json_decode($response, true);
 
     if (isset($data['quote'])) {
