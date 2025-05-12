@@ -1,22 +1,25 @@
 <?php
 require 'config.php';
 
-// Get update from Telegram
 $update = json_decode(file_get_contents("php://input"), true);
 $chat_id = $update["message"]["chat"]["id"];
-$text = strtolower($update["message"]["text"]);
+$text = $update["message"]["text"];
 
-// Send a message to user
-function sendMessage($chat_id, $message) {
-    file_get_contents(API_URL . "sendMessage?chat_id=$chat_id&text=" . urlencode($message));
+function sendMessage($chat_id, $message, $keyboard = null) {
+    $payload = [
+        'chat_id' => $chat_id,
+        'text' => $message
+    ];
+    if ($keyboard) {
+        $payload['reply_markup'] = json_encode(['inline_keyboard' => $keyboard]);
+    }
+    file_get_contents(API_URL . "sendMessage?" . http_build_query($payload));
 }
 
-// Send a photo with caption
 function sendPhoto($chat_id, $photo_url, $caption) {
     file_get_contents(API_URL . "sendPhoto?chat_id=$chat_id&photo=$photo_url&caption=" . urlencode($caption));
 }
 
-// Get character image from AniList
 function getCharacterImage($characterName) {
     $query = '
         query ($search: String) {
@@ -29,10 +32,7 @@ function getCharacterImage($characterName) {
     ';
     $variables = ['search' => $characterName];
 
-    $data = json_encode([
-        'query' => $query,
-        'variables' => $variables
-    ]);
+    $data = json_encode(['query' => $query, 'variables' => $variables]);
 
     $options = [
         'http' => [
@@ -42,43 +42,85 @@ function getCharacterImage($characterName) {
         ]
     ];
 
-    $context  = stream_context_create($options);
+    $context = stream_context_create($options);
     $result = file_get_contents('https://graphql.anilist.co', false, $context);
     $responseData = json_decode($result, true);
 
     return $responseData['data']['Character']['image']['large'] ?? null;
 }
 
-// Handle commands
-if ($text == "/start") {
-    $msg = "Welcome to Anime Quote Bot!\n\nCommands:\n/quote - Get a random anime quote with character image";
-    sendMessage($chat_id, $msg);
+function fetchQuote($anime = null) {
+    $url = $anime
+        ? "https://api.animechan.io/v1/quotes/anime?title=" . urlencode($anime)
+        : "https://api.animechan.io/v1/quotes/random";
 
-} elseif ($text == "/quote") {
-    // Fetch random anime quote
-    $response = file_get_contents("https://api.animechan.io/v1/quotes/random");
+    $response = @file_get_contents($url);
+    if (!$response) return null;
+
     $data = json_decode($response, true);
 
-    if (isset($data['quote'])) {
-        $quote = $data['quote'];
-        $character = $data['character'];
-        $anime = $data['anime'];
+    if (isset($data['quote'])) return [$data]; // Single quote format
+    if (is_array($data) && count($data)) return $data; // Multiple quotes
 
-        // Get character image
+    return null;
+}
+
+// Command handling
+if (strpos($text, "/start") === 0) {
+    $msg = "Welcome to Anime Quote Bot!\n\nCommands:\n/quote - Random quote\n/quote <anime name> - Quote from that anime";
+    $keyboard = [
+        [['text' => 'Get Random Quote', 'callback_data' => 'get_random']]
+    ];
+    sendMessage($chat_id, $msg, $keyboard);
+
+} elseif (strpos($text, "/quote") === 0) {
+    $parts = explode(" ", $text, 2);
+    $anime = $parts[1] ?? null;
+
+    $quotes = fetchQuote($anime);
+    if (!$quotes) {
+        sendMessage($chat_id, "No quote found. Try again with another anime.");
+        return;
+    }
+
+    $quoteData = $quotes[array_rand($quotes)];
+    $quote = $quoteData['quote'];
+    $character = $quoteData['character'];
+    $animeName = $quoteData['anime'];
+
+    $img_url = getCharacterImage($character);
+    if (!$img_url) {
+        $query = urlencode($character . " " . $animeName . " anime");
+        $img_url = "https://source.unsplash.com/600x800/?" . $query;
+    }
+
+    $caption = "\"$quote\"\n\n– $character from $animeName";
+    sendPhoto($chat_id, $img_url, $caption);
+
+} elseif (isset($update["callback_query"])) {
+    $data = $update["callback_query"]["data"];
+    $callback_chat_id = $update["callback_query"]["message"]["chat"]["id"];
+    if ($data == "get_random") {
+        $quotes = fetchQuote();
+        if (!$quotes) {
+            sendMessage($callback_chat_id, "Could not get a quote right now.");
+            return;
+        }
+
+        $quoteData = $quotes[0];
+        $quote = $quoteData['quote'];
+        $character = $quoteData['character'];
+        $animeName = $quoteData['anime'];
+
         $img_url = getCharacterImage($character);
         if (!$img_url) {
-            // Fallback to Unsplash
-            $query = urlencode($character . " " . $anime . " anime");
+            $query = urlencode($character . " " . $animeName . " anime");
             $img_url = "https://source.unsplash.com/600x800/?" . $query;
         }
 
-        // Send photo with quote
-        $caption = "\"$quote\"\n\n– $character from $anime";
-        sendPhoto($chat_id, $img_url, $caption);
-    } else {
-        sendMessage($chat_id, "Sorry, could not fetch quote. Try again.");
+        $caption = "\"$quote\"\n\n– $character from $animeName";
+        sendPhoto($callback_chat_id, $img_url, $caption);
     }
-
 } else {
-    sendMessage($chat_id, "Type /quote to get a random anime quote with image.");
+    sendMessage($chat_id, "Type /quote or /quote Naruto to get an anime quote.");
 }
