@@ -1,14 +1,23 @@
 import logging
 import requests
 import time
+import threading
 from telegram import Bot
 import os
+from flask import Flask
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+PORT = int(os.getenv("PORT", 8080))  # default port for Render
 
 bot = Bot(token=TOKEN)
 logging.basicConfig(level=logging.INFO)
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "✅ Quote Bot is running!"
 
 QUOTE_API = "https://quotes-api-w4zt.onrender.com/quotes/1"
 
@@ -36,7 +45,15 @@ def fetch_quote():
         logging.error(f"Error fetching quote: {e}")
         return None
 
-def main():
+def send_startup_message():
+    try:
+        bot.send_message(chat_id=CHANNEL_ID, text="🚀 *Quote Bot Started Successfully!*", parse_mode="Markdown")
+        logging.info("Startup message sent.")
+    except Exception as e:
+        logging.error(f"Failed to send startup message: {e}")
+
+def quote_loop():
+    send_startup_message()
     while True:
         quote_msg = fetch_quote()
         if quote_msg:
@@ -44,8 +61,9 @@ def main():
                 bot.send_message(chat_id=CHANNEL_ID, text=quote_msg)
                 logging.info("Quote sent successfully.")
             except Exception as e:
-                logging.error(f"Failed to send message: {e}")
+                logging.error(f"Failed to send quote: {e}")
         time.sleep(300)  # 5 minutes
 
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=quote_loop).start()
+    app.run(host="0.0.0.0", port=PORT)
